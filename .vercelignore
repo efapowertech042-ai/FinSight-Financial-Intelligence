@@ -1,0 +1,9 @@
+node_modules
+dist
+.venv
+.git
+.aistudio
+public/assets/aistudio
+*.log
+__pycache__
+**/__pycache__

@@ -1,0 +1,6 @@
+{
+  "name": "FinSight Financial Intelligence",
+  "description": "Financial intelligence, automated feature engineering, operating profit prediction, explainable AI (SHAP), anomaly detection, and graphical RAG analytics platform.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
