@@ -6,7 +6,10 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import pandas as pd
 
-from backend.lightweight_ml import permutation_importance
+try:
+    from .lightweight_ml import permutation_importance
+except ImportError:
+    from lightweight_ml import permutation_importance
 
 
 def _exact_tree_shap_single(tree: Any, x: np.ndarray) -> np.ndarray:

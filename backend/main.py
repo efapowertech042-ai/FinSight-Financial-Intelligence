@@ -16,30 +16,56 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from backend.anomaly import detect_anomalies_and_findings
-from backend.data_engineering import (
-    compute_engineered_row,
-    process_and_validate_dataset,
-)
-from backend.explainability import (
-    compute_global_explainability,
-    explain_single_prediction,
-)
-from backend.modeling import (
-    DRIVER_FEATURES,
-    EX_ANTE_FEATURES,
-    predict_from_user_inputs,
-    train_and_evaluate_suite,
-)
-from backend.rag_engine import run_graphical_rag_query
-from backend.forecasting_centre import (
-    build_forecasting_centre_bundle,
-    compute_accounting_5yr_simulation,
-    compute_custom_scenario_verdict,
-    compute_hypothesis_tests,
-    compute_operational_verdict,
-    compute_scenario_forecasts,
-)
+try:
+    from .anomaly import detect_anomalies_and_findings
+    from .data_engineering import (
+        compute_engineered_row,
+        process_and_validate_dataset,
+    )
+    from .explainability import (
+        compute_global_explainability,
+        explain_single_prediction,
+    )
+    from .modeling import (
+        DRIVER_FEATURES,
+        EX_ANTE_FEATURES,
+        predict_from_user_inputs,
+        train_and_evaluate_suite,
+    )
+    from .rag_engine import run_graphical_rag_query
+    from .forecasting_centre import (
+        build_forecasting_centre_bundle,
+        compute_accounting_5yr_simulation,
+        compute_custom_scenario_verdict,
+        compute_hypothesis_tests,
+        compute_operational_verdict,
+        compute_scenario_forecasts,
+    )
+except ImportError:
+    from anomaly import detect_anomalies_and_findings
+    from data_engineering import (
+        compute_engineered_row,
+        process_and_validate_dataset,
+    )
+    from explainability import (
+        compute_global_explainability,
+        explain_single_prediction,
+    )
+    from modeling import (
+        DRIVER_FEATURES,
+        EX_ANTE_FEATURES,
+        predict_from_user_inputs,
+        train_and_evaluate_suite,
+    )
+    from rag_engine import run_graphical_rag_query
+    from forecasting_centre import (
+        build_forecasting_centre_bundle,
+        compute_accounting_5yr_simulation,
+        compute_custom_scenario_verdict,
+        compute_hypothesis_tests,
+        compute_operational_verdict,
+        compute_scenario_forecasts,
+    )
 
 DEFAULT_DATA_PATH = Path(__file__).resolve().parent / "data" / "default_financial_data.csv"
 

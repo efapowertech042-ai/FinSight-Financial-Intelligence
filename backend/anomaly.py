@@ -5,7 +5,10 @@ from typing import Any, Dict, List
 
 import numpy as np
 import pandas as pd
-from backend.lightweight_ml import IsolationForest, StandardScaler
+try:
+    from .lightweight_ml import IsolationForest, StandardScaler
+except ImportError:
+    from lightweight_ml import IsolationForest, StandardScaler
 
 
 def _classify_severity(score: float) -> str:

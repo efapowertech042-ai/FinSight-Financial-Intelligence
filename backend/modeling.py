@@ -5,20 +5,36 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from backend.lightweight_ml import (
-    GradientBoostingRegressor,
-    LinearRegression,
-    Pipeline,
-    RandomForestRegressor,
-    Ridge,
-    SimpleImputer,
-    StandardScaler,
-    TimeSeriesSplit,
-    clone,
-    mean_absolute_error,
-    mean_squared_error,
-    r2_score,
-)
+try:
+    from .lightweight_ml import (
+        GradientBoostingRegressor,
+        LinearRegression,
+        Pipeline,
+        RandomForestRegressor,
+        Ridge,
+        SimpleImputer,
+        StandardScaler,
+        TimeSeriesSplit,
+        clone,
+        mean_absolute_error,
+        mean_squared_error,
+        r2_score,
+    )
+except ImportError:
+    from lightweight_ml import (
+        GradientBoostingRegressor,
+        LinearRegression,
+        Pipeline,
+        RandomForestRegressor,
+        Ridge,
+        SimpleImputer,
+        StandardScaler,
+        TimeSeriesSplit,
+        clone,
+        mean_absolute_error,
+        mean_squared_error,
+        r2_score,
+    )
 
 TARGET_COL = "Operating_Profit_NGN"
 

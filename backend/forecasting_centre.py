@@ -5,23 +5,42 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from backend.lightweight_ml import (
-    GradientBoostingRegressor,
-    LinearRegression,
-    RandomForestRegressor,
-    Ridge,
-    StandardScaler,
-    durbin_watson,
-    fit_autoreg,
-    fit_holt_damped,
-    fit_holt_winters_damped,
-    fit_ses,
-    ljung_box_pvalue,
-    mean_absolute_error,
-    mean_squared_error,
-    r2_score,
-    stats,
-)
+try:
+    from .lightweight_ml import (
+        GradientBoostingRegressor,
+        LinearRegression,
+        RandomForestRegressor,
+        Ridge,
+        StandardScaler,
+        durbin_watson,
+        fit_autoreg,
+        fit_holt_damped,
+        fit_holt_winters_damped,
+        fit_ses,
+        ljung_box_pvalue,
+        mean_absolute_error,
+        mean_squared_error,
+        r2_score,
+        stats,
+    )
+except ImportError:
+    from lightweight_ml import (
+        GradientBoostingRegressor,
+        LinearRegression,
+        RandomForestRegressor,
+        Ridge,
+        StandardScaler,
+        durbin_watson,
+        fit_autoreg,
+        fit_holt_damped,
+        fit_holt_winters_damped,
+        fit_ses,
+        ljung_box_pvalue,
+        mean_absolute_error,
+        mean_squared_error,
+        r2_score,
+        stats,
+    )
 
 
 TS_FEATURE_DICTIONARY: List[Dict[str, str]] = [
