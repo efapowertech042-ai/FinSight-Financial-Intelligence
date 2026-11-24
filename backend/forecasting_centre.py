@@ -16,6 +16,7 @@ try:
         fit_autoreg,
         fit_holt_damped,
         fit_holt_winters_damped,
+        fit_seasonal_ets,
         fit_ses,
         ljung_box_pvalue,
         mean_absolute_error,
@@ -34,6 +35,7 @@ except ImportError:
         fit_autoreg,
         fit_holt_damped,
         fit_holt_winters_damped,
+        fit_seasonal_ets,
         fit_ses,
         ljung_box_pvalue,
         mean_absolute_error,
@@ -356,6 +358,8 @@ def _forecast_model_candidates(
     train_df: pd.DataFrame,
     steps: int,
     target_col: str = "Operating_Profit_NGN",
+    fast_backtest: bool = False,
+    only_keys: Optional[set] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """
     Fits all candidate statistical & ML models strictly on train_df
@@ -366,34 +370,38 @@ def _forecast_model_candidates(
     results: Dict[str, Dict[str, Any]] = {}
 
     # 1. Naive Baseline
-    naive_pred = np.full(steps, y_train[-1], dtype=float)
-    results["naive"] = {
-        "name": "Naive Baseline (Last Value)",
-        "family": "Statistical / Baseline",
-        "preds": naive_pred,
-        "estimator": None,
-        "scaler": None,
-        "is_tree": False,
-        "status_note": "Persistence benchmark y_{t+h} = y_t",
-    }
+    if only_keys is None or "naive" in only_keys:
+        naive_pred = np.full(steps, y_train[-1], dtype=float)
+        results["naive"] = {
+            "name": "Naive Baseline (Last Value)",
+            "family": "Statistical / Baseline",
+            "preds": naive_pred,
+            "estimator": None,
+            "scaler": None,
+            "is_tree": False,
+            "status_note": "Persistence benchmark y_{t+h} = y_t",
+        }
+    else:
+        naive_pred = np.full(steps, y_train[-1], dtype=float)
 
     # 2. Seasonal Naive (12-month)
-    if n >= 12:
-        s_naive = np.array([y_train[-12 + (h % 12)] for h in range(steps)], dtype=float)
-    else:
-        s_naive = naive_pred.copy()
-    results["seasonal_naive"] = {
-        "name": "Seasonal Naive (12M)",
-        "family": "Statistical / Baseline",
-        "preds": s_naive,
-        "estimator": None,
-        "scaler": None,
-        "is_tree": False,
-        "status_note": "Prior-year same-month benchmark",
-    }
+    if only_keys is None or "seasonal_naive" in only_keys:
+        if n >= 12:
+            s_naive = np.array([y_train[-12 + (h % 12)] for h in range(steps)], dtype=float)
+        else:
+            s_naive = naive_pred.copy()
+        results["seasonal_naive"] = {
+            "name": "Seasonal Naive (12M)",
+            "family": "Statistical / Baseline",
+            "preds": s_naive,
+            "estimator": None,
+            "scaler": None,
+            "is_tree": False,
+            "status_note": "Prior-year same-month benchmark",
+        }
 
     # 3. Simple Exponential Smoothing
-    if n >= 8:
+    if n >= 8 and (only_keys is None or "ses" in only_keys):
         try:
             ses_pred, ses_alpha = fit_ses(y_train, steps)
             results["ses"] = {
@@ -408,8 +416,24 @@ def _forecast_model_candidates(
         except Exception:
             pass
 
-    # 4. Damped Trend Exponential Smoothing (Holt Damped)
-    if n >= 12:
+    # 4. Multiplicative Seasonal Exponential Smoothing ETS(M,N,M)
+    if n >= 24 and (only_keys is None or "seasonal_ets" in only_keys):
+        try:
+            sets_pred, (sets_a, sets_g) = fit_seasonal_ets(y_train, steps, m=12)
+            results["seasonal_ets"] = {
+                "name": "Seasonal Exponential Smoothing (ETS)",
+                "family": "Statistical / Time-Series",
+                "preds": sets_pred,
+                "estimator": None,
+                "scaler": None,
+                "is_tree": False,
+                "status_note": f"Multiplicative 12M seasonality (alpha={round(sets_a, 2)}, gamma={round(sets_g, 2)})",
+            }
+        except Exception:
+            pass
+
+    # 5. Damped Trend Exponential Smoothing (Holt Damped)
+    if n >= 12 and (only_keys is None or "holt_damped" in only_keys):
         try:
             holt_pred, holt_phi = fit_holt_damped(y_train, steps)
             results["holt_damped"] = {
@@ -419,13 +443,13 @@ def _forecast_model_candidates(
                 "estimator": None,
                 "scaler": None,
                 "is_tree": False,
-                "status_note": f"phi={round(_safe_float(holt_phi, 0.9), 3)}",
+                "status_note": f"phi={round(_safe_float(holt_phi, 0.8), 3)}",
             }
         except Exception:
             pass
 
-    # 5. Holt-Winters Additive Seasonal + Damped Trend
-    if n >= 24:
+    # 6. Holt-Winters Seasonal + Damped Trend (Multiplicative & Additive auto-fit)
+    if n >= 24 and (only_keys is None or "holt_winters" in only_keys):
         try:
             hw_pred = fit_holt_winters_damped(y_train, steps, m=12)
             results["holt_winters"] = {
@@ -435,13 +459,13 @@ def _forecast_model_candidates(
                 "estimator": None,
                 "scaler": None,
                 "is_tree": False,
-                "status_note": "Additive 12M seasonality + damped trend",
+                "status_note": "12M multiplicative/additive seasonality + damped trend",
             }
         except Exception:
             pass
 
-    # 6. Autoregressive AR(1,2,3,12) with trend
-    if n >= 20:
+    # 7. Autoregressive AR(1,2,3,12) with trend
+    if n >= 20 and (only_keys is None or "autoreg" in only_keys):
         try:
             ar_lags = [1, 2, 3, 12] if n >= 30 else [1, 2, 3]
             ar_pred = fit_autoreg(y_train, steps, lags=ar_lags)
@@ -457,12 +481,16 @@ def _forecast_model_candidates(
         except Exception:
             pass
 
-    # 7-10. ML Recursive Regression Models
-    if n >= 20:
+    # 8-11. ML Recursive Regression Models
+    ml_keys = {"linear_ts", "ridge_ts", "rf_ts", "gbr_ts"}
+    if n >= 20 and (only_keys is None or bool(only_keys & ml_keys)):
         X_mat, y_vec, _ = _prepare_ts_training_matrix(train_df, target_col=target_col)
         if len(X_mat) >= 10:
             scaler = StandardScaler()
             X_scaled = scaler.fit_transform(X_mat)
+
+            rf_trees = 35 if fast_backtest else 55
+            gbr_trees = 45 if fast_backtest else 70
 
             ml_specs: List[Tuple[str, str, Any, bool, bool]] = [
                 ("linear_ts", "Linear Regression (TS Features)", LinearRegression(), True, False),
@@ -470,20 +498,22 @@ def _forecast_model_candidates(
                 (
                     "rf_ts",
                     "Random Forest Regressor (TS)",
-                    RandomForestRegressor(n_estimators=100, max_depth=7, min_samples_leaf=2, random_state=42),
+                    RandomForestRegressor(n_estimators=rf_trees, max_depth=6, min_samples_leaf=2, random_state=42),
                     False,
                     True,
                 ),
                 (
                     "gbr_ts",
                     "Gradient Boosting Regressor (TS)",
-                    GradientBoostingRegressor(n_estimators=120, learning_rate=0.05, max_depth=3, random_state=42),
+                    GradientBoostingRegressor(n_estimators=gbr_trees, learning_rate=0.06, max_depth=3, random_state=42),
                     False,
                     True,
                 ),
             ]
 
             for key, name, est, use_scaler, is_tree in ml_specs:
+                if only_keys is not None and key not in only_keys:
+                    continue
                 try:
                     X_fit = X_scaled if use_scaler else X_mat
                     est.fit(X_fit, y_vec)
@@ -877,6 +907,16 @@ def _forecast_secondary_kpi(
             pass
     if len(y_tr) >= 24:
         try:
+            va_sets, _ = fit_seasonal_ets(y_tr, val_h, m=12)
+            candidates.append((
+                "Seasonal ETS (Multiplicative)",
+                va_sets,
+                lambda full_y: fit_seasonal_ets(full_y, steps, m=12)[0],
+            ))
+        except Exception:
+            pass
+    if len(y_tr) >= 24:
+        try:
             va_hw = fit_holt_winters_damped(y_tr, val_h, m=12)
             candidates.append((
                 "Holt-Winters Seasonal",
@@ -976,7 +1016,9 @@ def build_forecasting_centre_bundle(
     for orig in origins:
         bt_train = df.iloc[:orig].copy().reset_index(drop=True)
         bt_actual = df.iloc[orig : orig + backtest_horizon]["Operating_Profit_NGN"].astype(float).values
-        bt_runs = _forecast_model_candidates(bt_train, steps=len(bt_actual), target_col="Operating_Profit_NGN")
+        bt_runs = _forecast_model_candidates(
+            bt_train, steps=len(bt_actual), target_col="Operating_Profit_NGN", fast_backtest=True
+        )
         for k, res in bt_runs.items():
             if k in backtest_errors_by_key:
                 backtest_errors_by_key[k].append(float(math.sqrt(mean_squared_error(bt_actual, res["preds"]))))
@@ -1080,8 +1122,13 @@ def build_forecasting_centre_bundle(
         except Exception:
             lb_pvalue = None
 
-    # Refit Champion (and full model suite) on ALL historical data to forecast through Dec 2030
-    full_runs = _forecast_model_candidates(df, steps=steps, target_col="Operating_Profit_NGN")
+    # Refit Champion (+ driver importance fallback) on ALL historical data to forecast through Dec 2030
+    full_runs = _forecast_model_candidates(
+        df,
+        steps=steps,
+        target_col="Operating_Profit_NGN",
+        only_keys={champion_key, "ridge_ts", "naive"},
+    )
     champ_full = full_runs.get(champion_key) or full_runs["naive"]
     baseline_fc = champ_full["preds"]
 

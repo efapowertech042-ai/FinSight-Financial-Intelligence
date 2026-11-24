@@ -849,10 +849,27 @@ class _FlatTree:
         self.children_right = np.asarray(r_list, dtype=np.int32)
         self.value = np.asarray(v_list, dtype=float)
         self.n_node_samples = np.asarray(c_list, dtype=float)
+        self._f_py = f_list
+        self._t_py = t_list
+        self._l_py = l_list
+        self._r_py = r_list
+        self._v_py = v_list
         return self
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         n = X.shape[0]
+        if n == 1:
+            row = X[0]
+            f_py = self._f_py
+            t_py = self._t_py
+            l_py = self._l_py
+            r_py = self._r_py
+            node = 0
+            while True:
+                feat = f_py[node]
+                if feat < 0:
+                    return np.array([self._v_py[node]], dtype=float)
+                node = l_py[node] if float(row[feat]) <= t_py[node] else r_py[node]
         nodes = np.zeros(n, dtype=np.int32)
         f = self.feature
         t = self.threshold
@@ -1109,14 +1126,22 @@ def fit_ses(y: np.ndarray, steps: int) -> Tuple[np.ndarray, float]:
 
 def _holt_eval(y: np.ndarray, alpha: float, beta: float, phi: float) -> Tuple[float, float, float]:
     n = len(y)
-    level = float(y[0])
-    trend = float(y[1] - y[0]) if n >= 2 else 0.0
+    level = float(np.mean(y[: min(3, n)]))
+    if n >= 6:
+        trend = (float(np.mean(y[3:6])) - level) / 3.0
+    elif n >= 2:
+        trend = float(y[1] - y[0])
+    else:
+        trend = 0.0
     sse = 0.0
-    for val in y:
+    start_sse = max(0, n // 3)
+    for t, val in enumerate(y):
+        v = float(val)
         hat = level + phi * trend
-        err = val - hat
-        sse += err * err
-        new_level = alpha * val + (1.0 - alpha) * (level + phi * trend)
+        if t >= start_sse:
+            err = v - hat
+            sse += err * err
+        new_level = alpha * v + (1.0 - alpha) * (level + phi * trend)
         trend = beta * (new_level - level) + (1.0 - beta) * phi * trend
         level = new_level
     return sse, level, trend
@@ -1124,11 +1149,11 @@ def _holt_eval(y: np.ndarray, alpha: float, beta: float, phi: float) -> Tuple[fl
 
 def fit_holt_damped(y: np.ndarray, steps: int) -> Tuple[np.ndarray, float]:
     best_sse = float("inf")
-    best_params = (0.35, 0.15, 0.90)
+    best_params = (0.35, 0.10, 0.80)
     best_state = (float(y[-1]), 0.0)
-    for alpha in [0.15, 0.30, 0.50, 0.70, 0.85]:
-        for beta in [0.05, 0.15, 0.30, 0.50]:
-            for phi in [0.80, 0.88, 0.94, 0.98]:
+    for alpha in [0.20, 0.40, 0.60, 0.80]:
+        for beta in [0.02, 0.08, 0.20, 0.40]:
+            for phi in [0.55, 0.72, 0.84, 0.93]:
                 sse, lvl, tr = _holt_eval(y, alpha, beta, phi)
                 if sse < best_sse:
                     best_sse = sse
@@ -1137,11 +1162,11 @@ def fit_holt_damped(y: np.ndarray, steps: int) -> Tuple[np.ndarray, float]:
     # Local fine refinement around best grid point
     a0, b0, p0 = best_params
     for da in [-0.07, 0.0, 0.07]:
-        for db in [-0.05, 0.0, 0.05]:
-            for dp in [-0.03, 0.0, 0.02]:
+        for db in [-0.03, 0.0, 0.03]:
+            for dp in [-0.04, 0.0, 0.04]:
                 a = max(0.05, min(0.95, a0 + da))
-                b = max(0.01, min(0.80, b0 + db))
-                p = max(0.75, min(0.99, p0 + dp))
+                b = max(0.01, min(0.60, b0 + db))
+                p = max(0.50, min(0.96, p0 + dp))
                 sse, lvl, tr = _holt_eval(y, a, b, p)
                 if sse < best_sse:
                     best_sse = sse
@@ -1158,55 +1183,212 @@ def fit_holt_damped(y: np.ndarray, steps: int) -> Tuple[np.ndarray, float]:
     return fc, phi
 
 
-def _hw_eval(y: np.ndarray, alpha: float, beta: float, gamma: float, phi: float, m: int = 12) -> Tuple[float, float, float, np.ndarray]:
-    n = len(y)
-    # Initialize level & seasonal components using first full seasonal cycle
-    s0 = float(np.mean(y[:m]))
-    seas = np.array([float(y[i]) - s0 for i in range(m)], dtype=float)
-    seas -= np.mean(seas)
-    level = s0
-    if n >= 2 * m:
-        trend = (float(np.mean(y[m : 2 * m])) - s0) / m
-    else:
-        trend = (float(y[-1]) - float(y[0])) / max(1, n - 1)
+def _init_seasonal_ratios(ys: np.ndarray, m: int = 12) -> np.ndarray:
+    """Estimate centered median seasonal multipliers strictly from training series ys > 0."""
+    n = len(ys)
+    s0 = np.ones(m, dtype=float)
+    ratios: List[List[float]] = [[] for _ in range(m)]
+    half_w = m // 2
+    for t in range(n):
+        lo = max(0, t - half_w)
+        hi = min(n, t + (m - half_w))
+        c_mean = float(np.mean(ys[lo:hi]))
+        if c_mean > 1e-6:
+            ratios[t % m].append(float(ys[t]) / c_mean)
+    for k in range(m):
+        if ratios[k]:
+            s0[k] = float(np.median(ratios[k]))
+    mean_s = float(np.mean(s0)) or 1.0
+    s0 = np.clip(s0 / mean_s, 0.45, 1.95)
+    s0 /= float(np.mean(s0)) or 1.0
+    return s0
 
+
+def fit_seasonal_ets(y: np.ndarray, steps: int, m: int = 12) -> Tuple[np.ndarray, Tuple[float, float]]:
+    """
+    Multiplicative Seasonal Exponential Smoothing ETS(M,N,M) with automatic level shift
+    when historical data includes non-positive observations.
+    """
+    y_arr = np.asarray(y, dtype=float)
+    n = len(y_arr)
+    min_y = float(np.min(y_arr))
+    scale_ref = float(np.median(np.abs(y_arr))) or 1.0
+    shift = (abs(min_y) + 0.25 * scale_ref) if min_y <= 0.05 * scale_ref else 0.0
+    ys_list = (y_arr + shift).tolist()
+
+    s0_list = _init_seasonal_ratios(np.asarray(ys_list, dtype=float), m=m).tolist()
+    l0 = sum(ys_list[: min(m, n)]) / min(m, n)
+    start_sse = max(0, n // 3)
+
+    best_sse = float("inf")
+    best_state: Optional[Tuple[float, List[float], float, float]] = None
+    for alpha in (0.15, 0.30, 0.45, 0.60, 0.75, 0.90):
+        one_m_a = 1.0 - alpha
+        for gamma in (0.05, 0.15, 0.30, 0.50):
+            one_m_g = 1.0 - gamma
+            lvl = l0
+            seas = s0_list.copy()
+            sse = 0.0
+            for t in range(n):
+                idx = t % m
+                yt = ys_list[t]
+                s_val = seas[idx]
+                hat = lvl * s_val
+                if t >= start_sse:
+                    err = yt - hat
+                    sse += err * err
+                lvl = alpha * (yt / (s_val if s_val > 0.1 else 0.1)) + one_m_a * lvl
+                s_new = gamma * (yt / (lvl if lvl > 1.0 else 1.0)) + one_m_g * s_val
+                seas[idx] = 0.4 if s_new < 0.4 else (2.0 if s_new > 2.0 else s_new)
+            if sse < best_sse:
+                best_sse = sse
+                best_state = (lvl, seas.copy(), alpha, gamma)
+
+    if best_state is None:
+        return np.full(steps, float(y_arr[-1]), dtype=float), (0.5, 0.15)
+    lvl, seas, best_alpha, best_gamma = best_state
+    fc = np.array([lvl * seas[(n + h) % m] - shift for h in range(steps)], dtype=float)
+    return fc, (best_alpha, best_gamma)
+
+
+def _hw_add_eval(
+    y_list: List[float],
+    s0_init: List[float],
+    l0: float,
+    b0: float,
+    alpha: float,
+    beta: float,
+    gamma: float,
+    phi: float,
+    m: int = 12,
+) -> Tuple[float, float, float, List[float]]:
+    n = len(y_list)
+    seas = s0_init.copy()
+    level = l0
+    trend = b0
+    one_m_a = 1.0 - alpha
+    one_m_b = 1.0 - beta
+    one_m_g = 1.0 - gamma
     sse = 0.0
+    start_sse = max(0, n // 3)
     for t in range(n):
         s_idx = t % m
-        hat = level + phi * trend + seas[s_idx]
-        err = float(y[t]) - hat
-        sse += err * err
+        yt = y_list[t]
+        s_val = seas[s_idx]
+        phi_tr = phi * trend
+        hat = level + phi_tr + s_val
+        if t >= start_sse:
+            err = yt - hat
+            sse += err * err
         prev_lvl = level
-        level = alpha * (float(y[t]) - seas[s_idx]) + (1.0 - alpha) * (level + phi * trend)
-        trend = beta * (level - prev_lvl) + (1.0 - beta) * phi * trend
-        seas[s_idx] = gamma * (float(y[t]) - level) + (1.0 - gamma) * seas[s_idx]
+        level = alpha * (yt - s_val) + one_m_a * (level + phi_tr)
+        trend = beta * (level - prev_lvl) + one_m_b * phi_tr
+        seas[s_idx] = gamma * (yt - level) + one_m_g * s_val
+    return sse, level, trend, seas
+
+
+def _hw_mult_eval(
+    ys_list: List[float],
+    s0_init: List[float],
+    l0: float,
+    b0: float,
+    alpha: float,
+    beta: float,
+    gamma: float,
+    phi: float,
+    m: int = 12,
+) -> Tuple[float, float, float, List[float]]:
+    n = len(ys_list)
+    level = l0
+    trend = b0
+    seas = s0_init.copy()
+    one_m_a = 1.0 - alpha
+    one_m_b = 1.0 - beta
+    one_m_g = 1.0 - gamma
+    sse = 0.0
+    start_sse = max(0, n // 3)
+    for t in range(n):
+        s_idx = t % m
+        yt = ys_list[t]
+        s_val = seas[s_idx]
+        phi_tr = phi * trend
+        hat = (level + phi_tr) * s_val
+        if t >= start_sse:
+            err = yt - hat
+            sse += err * err
+        prev_lvl = level
+        level = alpha * (yt / (s_val if s_val > 0.1 else 0.1)) + one_m_a * (level + phi_tr)
+        trend = beta * (level - prev_lvl) + one_m_b * phi_tr
+        s_new = gamma * (yt / (level if level > 1.0 else 1.0)) + one_m_g * s_val
+        seas[s_idx] = 0.4 if s_new < 0.4 else (2.0 if s_new > 2.0 else s_new)
     return sse, level, trend, seas
 
 
 def fit_holt_winters_damped(y: np.ndarray, steps: int, m: int = 12) -> np.ndarray:
-    best_sse = float("inf")
-    best_state: Optional[Tuple[float, float, float, np.ndarray]] = None
-    best_phi = 0.92
-    for alpha in [0.20, 0.40, 0.65]:
-        for beta in [0.05, 0.20]:
-            for gamma in [0.10, 0.30, 0.55]:
-                for phi in [0.85, 0.92, 0.97]:
-                    sse, lvl, tr, seas = _hw_eval(y, alpha, beta, gamma, phi, m=m)
-                    if sse < best_sse:
-                        best_sse = sse
-                        best_phi = phi
-                        best_state = (lvl, tr, phi, seas.copy())
-    if best_state is None:
-        return np.full(steps, float(y[-1]), dtype=float)
-    lvl, tr, phi, seas = best_state
-    n = len(y)
+    """
+    Holt-Winters Seasonal Damped model comparing Multiplicative ETS(M,Ad,M) and
+    Additive ETS(A,Ad,A) strictly on in-sample training fit.
+    """
+    y_arr = np.asarray(y, dtype=float)
+    n = len(y_arr)
+    min_y = float(np.min(y_arr))
+    scale_ref = float(np.median(np.abs(y_arr))) or 1.0
+    shift = (abs(min_y) + 0.25 * scale_ref) if min_y <= 0.05 * scale_ref else 0.0
+    ys_arr = y_arr + shift
+    ys_list = ys_arr.tolist()
+    y_list = y_arr.tolist()
+
+    s0_mult = _init_seasonal_ratios(ys_arr, m=m).tolist()
+    l0_m = sum(ys_list[:m]) / m
+    b0_m = ((sum(ys_list[m : 2 * m]) / m) - l0_m) / m if n >= 2 * m else (ys_list[-1] - ys_list[0]) / max(1, n - 1)
+
+    l0_a = sum(y_list[:m]) / m
+    seas_a_raw = [y_list[i] - l0_a for i in range(m)]
+    seas_a_mean = sum(seas_a_raw) / m
+    s0_add = [v - seas_a_mean for v in seas_a_raw]
+    b0_a = ((sum(y_list[m : 2 * m]) / m) - l0_a) / m if n >= 2 * m else (y_list[-1] - y_list[0]) / max(1, n - 1)
+
+    best_mult_sse = float("inf")
+    best_mult: Optional[Tuple[float, float, float, List[float]]] = None
+    for alpha in (0.20, 0.40, 0.60, 0.80):
+        for beta in (0.01, 0.04, 0.10):
+            for gamma in (0.05, 0.15, 0.30):
+                for phi in (0.55, 0.72, 0.84, 0.92):
+                    sse, lvl, tr, seas = _hw_mult_eval(ys_list, s0_mult, l0_m, b0_m, alpha, beta, gamma, phi, m=m)
+                    if sse < best_mult_sse:
+                        best_mult_sse = sse
+                        best_mult = (lvl, tr, phi, seas)
+
+    best_add_sse = float("inf")
+    best_add: Optional[Tuple[float, float, float, List[float]]] = None
+    for alpha in (0.20, 0.40, 0.65):
+        for beta in (0.02, 0.08, 0.18):
+            for gamma in (0.10, 0.30, 0.50):
+                for phi in (0.60, 0.78, 0.90):
+                    sse, lvl, tr, seas = _hw_add_eval(y_list, s0_add, l0_a, b0_a, alpha, beta, gamma, phi, m=m)
+                    if sse < best_add_sse:
+                        best_add_sse = sse
+                        best_add = (lvl, tr, phi, seas)
+
+    use_mult = best_mult is not None and (best_add is None or best_mult_sse <= best_add_sse)
     fc = np.empty(steps, dtype=float)
-    phi_sum = 0.0
-    for h in range(1, steps + 1):
-        phi_sum += phi ** h
-        s_idx = (n + h - 1) % m
-        fc[h - 1] = lvl + phi_sum * tr + seas[s_idx]
-    return fc
+    if use_mult and best_mult is not None:
+        lvl, tr, phi, seas = best_mult
+        phi_sum = 0.0
+        for h in range(1, steps + 1):
+            phi_sum += phi ** h
+            s_idx = (n + h - 1) % m
+            fc[h - 1] = ((lvl + phi_sum * tr) * seas[s_idx]) - shift
+        return fc
+    if best_add is not None:
+        lvl, tr, phi, seas = best_add
+        phi_sum = 0.0
+        for h in range(1, steps + 1):
+            phi_sum += phi ** h
+            s_idx = (n + h - 1) % m
+            fc[h - 1] = lvl + phi_sum * tr + seas[s_idx]
+        return fc
+    return np.full(steps, float(y_arr[-1]), dtype=float)
 
 
 def fit_autoreg(y: np.ndarray, steps: int, lags: List[int]) -> np.ndarray:
